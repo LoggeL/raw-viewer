@@ -8,12 +8,13 @@
     "dev": "vite"
   },
   "dependencies": {
+    "libraw-wasm": "^1.1.2",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.2",
     "typescript": "^5.9.2",
-    "vite": "^7.1.3",
-    "@vitejs/plugin-react": "^5.0.2"
+    "vite": "^7.1.3"
   }
 }

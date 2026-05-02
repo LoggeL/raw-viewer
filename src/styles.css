@@ -6,14 +6,33 @@
 }
 
 * { box-sizing: border-box; }
+html, body, #root { min-height: 100%; }
 body { margin: 0; }
 button, input { font: inherit; }
+a { color: inherit; }
 
 .app-shell {
   min-height: 100vh;
   display: grid;
   grid-template-columns: 360px 1fr;
   background: linear-gradient(180deg, #11151b 0%, #0b0e12 100%);
+}
+
+.app-shell.drop-active::after {
+  content: 'Drop files to import';
+  position: fixed;
+  inset: 24px;
+  border: 2px dashed rgba(94, 163, 255, 0.8);
+  border-radius: 28px;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 16, 26, 0.78);
+  color: #dce9ff;
+  font-size: clamp(1.3rem, 3vw, 2rem);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  z-index: 10;
 }
 
 .sidebar {
@@ -23,6 +42,7 @@ button, input { font: inherit; }
   flex-direction: column;
   gap: 18px;
   background: rgba(255,255,255,0.03);
+  min-height: 100vh;
 }
 
 .sidebar h1, .viewer h2 { margin: 0; }
@@ -42,8 +62,13 @@ button, input { font: inherit; }
 .upload-card span { font-weight: 700; }
 .upload-card small { color: #a2acb8; }
 
-.actions { display: flex; gap: 10px; }
-.actions button, .viewer-topbar a {
+.actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.actions.wrap { flex-wrap: wrap; }
+.actions button, .actions a {
   border: 0;
   border-radius: 12px;
   padding: 10px 14px;
@@ -57,7 +82,8 @@ button, input { font: inherit; }
   background: rgba(255,255,255,0.08);
   color: #f3f5f7;
 }
-.actions .ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+.actions .ghost:disabled,
+.actions button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .thumb-list {
   display: flex;
@@ -65,6 +91,7 @@ button, input { font: inherit; }
   gap: 10px;
   overflow: auto;
   min-height: 0;
+  padding-right: 2px;
 }
 .thumb {
   position: relative;
@@ -84,11 +111,22 @@ button, input { font: inherit; }
   border-color: #5ea3ff;
   background: rgba(94,163,255,0.14);
 }
-.thumb img {
+.thumb-preview img, .thumb-placeholder {
   width: 64px;
   height: 64px;
-  object-fit: cover;
   border-radius: 12px;
+}
+.thumb-preview img {
+  object-fit: cover;
+}
+.thumb-placeholder {
+  display: grid;
+  place-items: center;
+  background: rgba(255,255,255,0.08);
+  color: #d8e4f7;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
 }
 .thumb-meta {
   display: flex;
@@ -102,6 +140,19 @@ button, input { font: inherit; }
   text-overflow: ellipsis;
 }
 .thumb-meta span { color: #a2acb8; font-size: 0.9rem; }
+.pill {
+  align-self: flex-start;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: rgba(255,255,255,0.08);
+  text-transform: uppercase;
+  font-size: 0.72rem !important;
+  letter-spacing: 0.06em;
+}
+.pill.ready { color: #86efac; }
+.pill.processing { color: #facc15; }
+.pill.error { color: #fda4af; }
+.error-text { color: #fda4af !important; }
 .remove {
   position: absolute;
   top: 8px;
@@ -115,20 +166,34 @@ button, input { font: inherit; }
   padding: 24px;
   color: #a2acb8;
 }
+.placeholder.hero {
+  min-height: 60vh;
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
 
 .viewer {
   padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
+  min-width: 0;
 }
 .viewer-topbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
-.viewer-topbar p { margin: 4px 0 0; color: #a2acb8; }
+.viewer-topbar p, .viewer-subbar { margin: 4px 0 0; color: #a2acb8; }
+.viewer-subbar {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 0.95rem;
+}
 .image-stage {
   flex: 1;
   min-height: 0;
@@ -138,18 +203,24 @@ button, input { font: inherit; }
   border: 1px solid rgba(255,255,255,0.06);
   border-radius: 24px;
   padding: 20px;
-  overflow: auto;
+  overflow: hidden;
+  position: relative;
 }
 .image-stage img {
-  max-width: 100%;
-  max-height: calc(100vh - 160px);
+  max-width: min(100%, 2400px);
+  max-height: calc(100vh - 220px);
   object-fit: contain;
   border-radius: 16px;
   box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+  transform-origin: center center;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
 }
+.image-stage img.dragging { cursor: grabbing; }
 
 @media (max-width: 900px) {
   .app-shell { grid-template-columns: 1fr; }
-  .sidebar { border-right: 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .sidebar { border-right: 0; border-bottom: 1px solid rgba(255,255,255,0.08); min-height: unset; }
   .image-stage img { max-height: 70vh; }
 }
