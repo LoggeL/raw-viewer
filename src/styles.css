@@ -150,6 +150,7 @@ a { color: inherit; }
   letter-spacing: 0.06em;
 }
 .pill.ready { color: #86efac; }
+.pill.queued { color: #93c5fd; }
 .pill.processing { color: #facc15; }
 .pill.error { color: #fda4af; }
 .error-text { color: #fda4af !important; }
@@ -206,6 +207,15 @@ a { color: inherit; }
 .brightness-control input {
   accent-color: #5ea3ff;
 }
+
+.list-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: #9eabb9;
+  font-size: 0.9rem;
+}
+
 .image-stage {
   flex: 1;
   min-height: 0;

@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client'
 import LibRaw from 'libraw-wasm'
 import './styles.css'
 
-type ItemStatus = 'ready' | 'processing' | 'error'
+type ItemStatus = 'queued' | 'ready' | 'processing' | 'error'
 
 type Item = {
   id: string
@@ -14,11 +14,14 @@ type Item = {
   status: ItemStatus
   error?: string
   isRaw: boolean
+  thumbLoaded: boolean
 }
 
 const RAW_EXTENSIONS = new Set([
   '3fr', 'arw', 'cr2', 'cr3', 'dcr', 'dng', 'erf', 'kdc', 'mrw', 'nef', 'nrw', 'orf', 'pef', 'raf', 'raw', 'rw2', 'sr2', 'srf', 'x3f',
 ])
+const MAX_VISIBLE_THUMBS = 120
+const RAW_CONCURRENCY = 2
 
 const formatBytes = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`
@@ -35,9 +38,7 @@ const formatBytes = (bytes: number) => {
 const getExtension = (name: string) => name.split('.').pop()?.toLowerCase() ?? ''
 const isRawFile = (file: File) => RAW_EXTENSIONS.has(getExtension(file.name))
 const isRegularImage = (file: File) => file.type.startsWith('image/') && !isRawFile(file)
-
 const makeId = (file: File) => `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`
-
 const readFileBuffer = async (file: File) => new Uint8Array(await file.arrayBuffer())
 
 const decodeRawToObjectUrl = async (file: File) => {
@@ -79,11 +80,45 @@ const decodeRawToObjectUrl = async (file: File) => {
     canvas.toBlob((value) => {
       if (value) resolve(value)
       else reject(new Error('Failed to export decoded RAW preview'))
-    }, 'image/jpeg', 0.95)
+    }, 'image/jpeg', 0.9)
   })
 
   return URL.createObjectURL(blob)
 }
+
+type ThumbItemProps = {
+  item: Item
+  active: boolean
+  onSelect: (id: string) => void
+  onRemove: (id: string) => void
+  onLoadThumb: (id: string) => void
+}
+
+const ThumbItem = React.memo(function ThumbItem({ item, active, onSelect, onRemove, onLoadThumb }: ThumbItemProps) {
+  const showPreview = item.url && (item.thumbLoaded || active)
+
+  return (
+    <button className={`thumb ${active ? 'active' : ''}`} onClick={() => onSelect(item.id)}>
+      <div className="thumb-preview">
+        {showPreview ? (
+          <img src={item.url} alt={item.name} loading="lazy" onLoad={() => onLoadThumb(item.id)} />
+        ) : (
+          <div className="thumb-placeholder">{item.isRaw ? 'RAW' : 'IMG'}</div>
+        )}
+      </div>
+      <div className="thumb-meta">
+        <strong title={item.name}>{item.name}</strong>
+        <span>{item.sizeLabel}</span>
+        <span className={`pill ${item.status}`}>{item.status === 'processing' ? 'decoding…' : item.status === 'queued' ? 'queued' : item.status === 'error' ? 'failed' : item.isRaw ? 'raw' : 'image'}</span>
+        {item.error ? <span className="error-text">{item.error}</span> : null}
+      </div>
+      <span className="remove" onClick={(event) => {
+        event.stopPropagation()
+        onRemove(item.id)
+      }}>×</span>
+    </button>
+  )
+})
 
 function App() {
   const [items, setItems] = React.useState<Item[]>([])
@@ -97,9 +132,13 @@ function App() {
   const inputRef = React.useRef<HTMLInputElement | null>(null)
   const folderInputRef = React.useRef<HTMLInputElement | null>(null)
   const stageRef = React.useRef<HTMLDivElement | null>(null)
+  const decodeQueueRef = React.useRef<Item[]>([])
+  const activeDecodersRef = React.useRef(0)
 
   React.useEffect(() => () => {
-    items.forEach((item) => URL.revokeObjectURL(item.url))
+    items.forEach((item) => {
+      if (item.url) URL.revokeObjectURL(item.url)
+    })
   }, [items])
 
   React.useEffect(() => {
@@ -108,22 +147,54 @@ function App() {
     setPan({ x: 0, y: 0 })
   }, [selectedId])
 
-  const addFiles = React.useCallback(async (fileList: FileList | File[] | null) => {
+  const processQueue = React.useCallback(() => {
+    while (activeDecodersRef.current < RAW_CONCURRENCY && decodeQueueRef.current.length > 0) {
+      const next = decodeQueueRef.current.shift()
+      if (!next) return
+      activeDecodersRef.current += 1
+
+      setItems((prev) => prev.map((entry) => entry.id === next.id ? { ...entry, status: 'processing' } : entry))
+
+      decodeRawToObjectUrl(next.file)
+        .then((url) => {
+          setItems((prev) => prev.map((entry) => entry.id === next.id ? { ...entry, url, status: 'ready' } : entry))
+        })
+        .catch((error) => {
+          setItems((prev) => prev.map((entry) => entry.id === next.id ? {
+            ...entry,
+            status: 'error',
+            error: error instanceof Error ? error.message : 'RAW decode failed',
+          } : entry))
+        })
+        .finally(() => {
+          activeDecodersRef.current -= 1
+          processQueue()
+        })
+    }
+  }, [])
+
+  const addFiles = React.useCallback((fileList: FileList | File[] | null) => {
     const files = fileList ? Array.from(fileList) : []
     if (!files.length) return
 
     const candidates = files.filter((file) => isRegularImage(file) || isRawFile(file))
     if (!candidates.length) return
 
-    const initialItems = candidates.map((file) => ({
-      id: makeId(file),
-      file,
-      url: isRegularImage(file) ? URL.createObjectURL(file) : '',
-      name: file.webkitRelativePath || file.name,
-      sizeLabel: formatBytes(file.size),
-      status: isRegularImage(file) ? 'ready' as const : 'processing' as const,
-      isRaw: isRawFile(file),
-    }))
+    const currentCount = items.length
+    const initialItems: Item[] = candidates.map((file, index) => {
+      const raw = isRawFile(file)
+      const eagerThumb = currentCount + index < MAX_VISIBLE_THUMBS
+      return {
+        id: makeId(file),
+        file,
+        url: !raw && eagerThumb ? URL.createObjectURL(file) : '',
+        name: file.webkitRelativePath || file.name,
+        sizeLabel: formatBytes(file.size),
+        status: raw ? 'queued' : 'ready',
+        isRaw: raw,
+        thumbLoaded: eagerThumb,
+      }
+    })
 
     setItems((prev) => {
       const merged = [...prev, ...initialItems]
@@ -131,23 +202,32 @@ function App() {
       return merged
     })
 
-    for (const item of initialItems.filter((entry) => entry.isRaw)) {
-      try {
-        const url = await decodeRawToObjectUrl(item.file)
-        setItems((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, url, status: 'ready' } : entry))
-      } catch (error) {
-        setItems((prev) => prev.map((entry) => entry.id === item.id ? {
-          ...entry,
-          status: 'error',
-          error: error instanceof Error ? error.message : 'RAW decode failed',
-        } : entry))
-      }
+    const queuedRaws = initialItems.filter((item) => item.isRaw)
+    if (queuedRaws.length) {
+      decodeQueueRef.current.push(...queuedRaws)
+      processQueue()
     }
-  }, [])
+  }, [items.length, processQueue])
 
   const selected = items.find((item) => item.id === selectedId) ?? null
+  const visibleItems = React.useMemo(() => {
+    if (items.length <= MAX_VISIBLE_THUMBS) return items
+    const selectedIndex = items.findIndex((item) => item.id === selectedId)
+    if (selectedIndex === -1) return items.slice(0, MAX_VISIBLE_THUMBS)
+    const half = Math.floor(MAX_VISIBLE_THUMBS / 2)
+    const start = Math.max(0, Math.min(selectedIndex - half, items.length - MAX_VISIBLE_THUMBS))
+    return items.slice(start, start + MAX_VISIBLE_THUMBS)
+  }, [items, selectedId])
+
+  const ensureThumbLoaded = React.useCallback((id: string) => {
+    setItems((prev) => prev.map((item) => {
+      if (item.id !== id || item.thumbLoaded || item.isRaw) return item
+      return { ...item, thumbLoaded: true, url: URL.createObjectURL(item.file) }
+    }))
+  }, [])
 
   const removeItem = (id: string) => {
+    decodeQueueRef.current = decodeQueueRef.current.filter((item) => item.id !== id)
     setItems((prev) => {
       const target = prev.find((item) => item.id === id)
       if (target?.url) URL.revokeObjectURL(target.url)
@@ -158,14 +238,21 @@ function App() {
   }
 
   const clearAll = () => {
+    decodeQueueRef.current = []
     items.forEach((item) => item.url && URL.revokeObjectURL(item.url))
     setItems([])
     setSelectedId(null)
     setZoom(1)
+    setBrightness(100)
     setPan({ x: 0, y: 0 })
     if (inputRef.current) inputRef.current.value = ''
     if (folderInputRef.current) folderInputRef.current.value = ''
   }
+
+  React.useEffect(() => {
+    if (!selected || selected.url || selected.isRaw) return
+    setItems((prev) => prev.map((item) => item.id === selected.id ? { ...item, url: URL.createObjectURL(item.file), thumbLoaded: true } : item))
+  }, [selected])
 
   const zoomBy = (delta: number) => setZoom((current) => Math.min(8, Math.max(0.25, Number((current + delta).toFixed(2)))))
   const resetView = () => {
@@ -205,6 +292,12 @@ function App() {
     else await stageRef.current.requestFullscreen()
   }
 
+  const stats = React.useMemo(() => {
+    const queued = items.filter((item) => item.status === 'queued').length
+    const processing = items.filter((item) => item.status === 'processing').length
+    return { total: items.length, queued, processing }
+  }, [items])
+
   return (
     <div
       className={`app-shell ${isDropActive ? 'drop-active' : ''}`}
@@ -219,22 +312,22 @@ function App() {
       onDrop={(event) => {
         event.preventDefault()
         setIsDropActive(false)
-        void addFiles(event.dataTransfer.files)
+        addFiles(event.dataTransfer.files)
       }}
     >
       <aside className="sidebar">
         <div>
           <h1>RAW Viewer</h1>
-          <p className="muted">Drop in lots of images or RAWs, browse them fast, zoom around, and keep everything local in the browser.</p>
+          <p className="muted">Handles large batches more carefully now: lazy thumbs, capped visible list, and throttled RAW decoding.</p>
         </div>
 
         <label className="upload-card">
-          <input ref={inputRef} type="file" accept="image/*,.cr2,.cr3,.nef,.arw,.dng,.raf,.rw2,.orf,.pef,.sr2,.x3f,.raw" multiple onChange={(event) => void addFiles(event.target.files)} />
+          <input ref={inputRef} type="file" accept="image/*,.cr2,.cr3,.nef,.arw,.dng,.raf,.rw2,.orf,.pef,.sr2,.x3f,.raw" multiple onChange={(event) => addFiles(event.target.files)} />
           <span>Choose images or RAWs</span>
           <small>Multi-select, drag & drop, and folder upload supported</small>
         </label>
 
-        <input ref={folderInputRef} type="file" multiple hidden {...({ webkitdirectory: 'true', directory: '' } as Record<string, string>)} onChange={(event) => void addFiles(event.target.files)} />
+        <input ref={folderInputRef} type="file" multiple hidden {...({ webkitdirectory: 'true', directory: '' } as Record<string, string>)} onChange={(event) => addFiles(event.target.files)} />
 
         <div className="actions wrap">
           <button onClick={() => inputRef.current?.click()}>Add files</button>
@@ -242,26 +335,26 @@ function App() {
           <button className="ghost" onClick={clearAll} disabled={!items.length}>Clear all</button>
         </div>
 
+        <div className="list-stats">
+          <span>{stats.total} files</span>
+          {stats.processing ? <span>{stats.processing} decoding</span> : null}
+          {stats.queued ? <span>{stats.queued} queued</span> : null}
+          {items.length > visibleItems.length ? <span>showing {visibleItems.length} around selection</span> : null}
+        </div>
+
         <div className="thumb-list">
           {items.length === 0 ? (
             <div className="empty-state">No images yet. Drop a folder or a whole pile of files here.</div>
           ) : (
-            items.map((item) => (
-              <button key={item.id} className={`thumb ${item.id === selectedId ? 'active' : ''}`} onClick={() => setSelectedId(item.id)}>
-                <div className="thumb-preview">
-                  {item.url ? <img src={item.url} alt={item.name} loading="lazy" /> : <div className="thumb-placeholder">RAW</div>}
-                </div>
-                <div className="thumb-meta">
-                  <strong title={item.name}>{item.name}</strong>
-                  <span>{item.sizeLabel}</span>
-                  <span className={`pill ${item.status}`}>{item.status === 'processing' ? 'decoding…' : item.status === 'error' ? 'failed' : item.isRaw ? 'raw' : 'image'}</span>
-                  {item.error ? <span className="error-text">{item.error}</span> : null}
-                </div>
-                <span className="remove" onClick={(event) => {
-                  event.stopPropagation()
-                  removeItem(item.id)
-                }}>×</span>
-              </button>
+            visibleItems.map((item) => (
+              <ThumbItem
+                key={item.id}
+                item={item}
+                active={item.id === selectedId}
+                onSelect={setSelectedId}
+                onRemove={removeItem}
+                onLoadThumb={ensureThumbLoaded}
+              />
             ))
           )}
         </div>
@@ -287,15 +380,9 @@ function App() {
               <span>Zoom {Math.round(zoom * 100)}%</span>
               <label className="brightness-control">
                 <span>Helligkeit {brightness}%</span>
-                <input
-                  type="range"
-                  min="50"
-                  max="200"
-                  step="5"
-                  value={brightness}
-                  onChange={(event) => setBrightness(Number(event.target.value))}
-                />
+                <input type="range" min="50" max="200" step="5" value={brightness} onChange={(event) => setBrightness(Number(event.target.value))} />
               </label>
+              {selected.status === 'queued' ? <span>Queued for RAW decode…</span> : null}
               {selected.status === 'processing' ? <span>Decoding RAW…</span> : null}
               {selected.status === 'error' ? <span className="error-text">{selected.error}</span> : null}
             </div>
@@ -315,8 +402,8 @@ function App() {
                 />
               ) : (
                 <div className="placeholder">
-                  <h2>{selected.status === 'processing' ? 'Decoding…' : 'Could not preview this file'}</h2>
-                  <p>{selected.status === 'processing' ? 'RAW processing happens locally in your browser.' : selected.error ?? 'This file could not be rendered.'}</p>
+                  <h2>{selected.status === 'queued' ? 'Waiting in queue…' : selected.status === 'processing' ? 'Decoding…' : 'Could not preview this file'}</h2>
+                  <p>{selected.status === 'queued' ? 'RAW files are decoded with limited concurrency so huge batches do not melt the browser.' : selected.status === 'processing' ? 'RAW processing happens locally in your browser.' : selected.error ?? 'This file could not be rendered.'}</p>
                 </div>
               )}
             </div>
