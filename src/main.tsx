@@ -44,17 +44,18 @@ const readFileBuffer = async (file: File) => new Uint8Array(await file.arrayBuff
 
 const decodeRawToObjectUrl = async (file: File) => {
   const raw = new LibRaw()
-  await raw.open(await readFileBuffer(file), {
+  const buffer = await readFileBuffer(file)
+  await raw.open(buffer, {
     useCameraWb: true,
     outputColor: 1,
     outputBps: 8,
     noAutoBright: false,
     autoBrightThr: 0.01,
-    halfSize: false,
+    halfSize: true,
   })
 
-  const image = await raw.imageData()
   const metadata = await raw.metadata(false)
+  const image = await raw.imageData()
   const width = metadata?.width || metadata?.raw_width || metadata?.iwidth
   const height = metadata?.height || metadata?.raw_height || metadata?.iheight
 
@@ -448,7 +449,7 @@ function App() {
               ) : (
                 <div className="placeholder">
                   <h2>{selected.status === 'queued' ? 'Waiting in queue…' : selected.status === 'processing' ? 'Decoding…' : 'Could not preview this file'}</h2>
-                  <p>{selected.status === 'queued' ? 'RAW files are decoded with limited concurrency so huge batches do not melt the browser.' : selected.status === 'processing' ? 'RAW processing happens locally in your browser.' : selected.error ?? 'This file could not be rendered.'}</p>
+                  <p>{selected.status === 'queued' ? 'RAW files are decoded with limited concurrency so huge batches do not melt the browser.' : selected.status === 'processing' ? 'RAW preview is being prepared locally in your browser.' : selected.error ?? 'This file could not be rendered.'}</p>
                 </div>
               )}
             </div>
