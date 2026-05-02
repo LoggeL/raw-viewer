@@ -20,8 +20,9 @@ type Item = {
 const RAW_EXTENSIONS = new Set([
   '3fr', 'arw', 'cr2', 'cr3', 'dcr', 'dng', 'erf', 'kdc', 'mrw', 'nef', 'nrw', 'orf', 'pef', 'raf', 'raw', 'rw2', 'sr2', 'srf', 'x3f',
 ])
-const MAX_VISIBLE_THUMBS = 120
 const RAW_CONCURRENCY = 2
+const THUMB_ROW_HEIGHT = 86
+const THUMB_OVERSCAN = 8
 
 const formatBytes = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`
@@ -91,17 +92,14 @@ type ThumbItemProps = {
   active: boolean
   onSelect: (id: string) => void
   onRemove: (id: string) => void
-  onLoadThumb: (id: string) => void
 }
 
-const ThumbItem = React.memo(function ThumbItem({ item, active, onSelect, onRemove, onLoadThumb }: ThumbItemProps) {
-  const showPreview = item.url && (item.thumbLoaded || active)
-
+const ThumbItem = React.memo(function ThumbItem({ item, active, onSelect, onRemove }: ThumbItemProps) {
   return (
     <button className={`thumb ${active ? 'active' : ''}`} onClick={() => onSelect(item.id)}>
       <div className="thumb-preview">
-        {showPreview ? (
-          <img src={item.url} alt={item.name} loading="lazy" onLoad={() => onLoadThumb(item.id)} />
+        {item.url ? (
+          <img src={item.url} alt={item.name} loading="lazy" />
         ) : (
           <div className="thumb-placeholder">{item.isRaw ? 'RAW' : 'IMG'}</div>
         )}
@@ -128,10 +126,13 @@ function App() {
   const [pan, setPan] = React.useState({ x: 0, y: 0 })
   const [isDragging, setIsDragging] = React.useState(false)
   const [isDropActive, setIsDropActive] = React.useState(false)
+  const [thumbScrollTop, setThumbScrollTop] = React.useState(0)
+  const [thumbViewportHeight, setThumbViewportHeight] = React.useState(640)
   const dragStateRef = React.useRef<{ x: number; y: number; startX: number; startY: number } | null>(null)
   const inputRef = React.useRef<HTMLInputElement | null>(null)
   const folderInputRef = React.useRef<HTMLInputElement | null>(null)
   const stageRef = React.useRef<HTMLDivElement | null>(null)
+  const thumbListRef = React.useRef<HTMLDivElement | null>(null)
   const decodeQueueRef = React.useRef<Item[]>([])
   const activeDecodersRef = React.useRef(0)
 
@@ -146,6 +147,18 @@ function App() {
     setBrightness(100)
     setPan({ x: 0, y: 0 })
   }, [selectedId])
+
+  React.useLayoutEffect(() => {
+    const el = thumbListRef.current
+    if (!el) return
+
+    const update = () => setThumbViewportHeight(el.clientHeight)
+    update()
+
+    const observer = new ResizeObserver(update)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   const processQueue = React.useCallback(() => {
     while (activeDecodersRef.current < RAW_CONCURRENCY && decodeQueueRef.current.length > 0) {
@@ -180,21 +193,16 @@ function App() {
     const candidates = files.filter((file) => isRegularImage(file) || isRawFile(file))
     if (!candidates.length) return
 
-    const currentCount = items.length
-    const initialItems: Item[] = candidates.map((file, index) => {
-      const raw = isRawFile(file)
-      const eagerThumb = currentCount + index < MAX_VISIBLE_THUMBS
-      return {
-        id: makeId(file),
-        file,
-        url: !raw && eagerThumb ? URL.createObjectURL(file) : '',
-        name: file.webkitRelativePath || file.name,
-        sizeLabel: formatBytes(file.size),
-        status: raw ? 'queued' : 'ready',
-        isRaw: raw,
-        thumbLoaded: eagerThumb,
-      }
-    })
+    const initialItems: Item[] = candidates.map((file) => ({
+      id: makeId(file),
+      file,
+      url: '',
+      name: file.webkitRelativePath || file.name,
+      sizeLabel: formatBytes(file.size),
+      status: isRawFile(file) ? 'queued' : 'ready',
+      isRaw: isRawFile(file),
+      thumbLoaded: false,
+    }))
 
     setItems((prev) => {
       const merged = [...prev, ...initialItems]
@@ -207,24 +215,55 @@ function App() {
       decodeQueueRef.current.push(...queuedRaws)
       processQueue()
     }
-  }, [items.length, processQueue])
+  }, [processQueue])
 
   const selected = items.find((item) => item.id === selectedId) ?? null
-  const visibleItems = React.useMemo(() => {
-    if (items.length <= MAX_VISIBLE_THUMBS) return items
-    const selectedIndex = items.findIndex((item) => item.id === selectedId)
-    if (selectedIndex === -1) return items.slice(0, MAX_VISIBLE_THUMBS)
-    const half = Math.floor(MAX_VISIBLE_THUMBS / 2)
-    const start = Math.max(0, Math.min(selectedIndex - half, items.length - MAX_VISIBLE_THUMBS))
-    return items.slice(start, start + MAX_VISIBLE_THUMBS)
-  }, [items, selectedId])
 
-  const ensureThumbLoaded = React.useCallback((id: string) => {
-    setItems((prev) => prev.map((item) => {
-      if (item.id !== id || item.thumbLoaded || item.isRaw) return item
-      return { ...item, thumbLoaded: true, url: URL.createObjectURL(item.file) }
-    }))
-  }, [])
+  const selectedIndex = React.useMemo(
+    () => items.findIndex((item) => item.id === selectedId),
+    [items, selectedId],
+  )
+
+  React.useEffect(() => {
+    const el = thumbListRef.current
+    if (!el || selectedIndex < 0) return
+    const rowTop = selectedIndex * THUMB_ROW_HEIGHT
+    const rowBottom = rowTop + THUMB_ROW_HEIGHT
+    const viewTop = el.scrollTop
+    const viewBottom = viewTop + el.clientHeight
+
+    if (rowTop < viewTop) el.scrollTop = rowTop
+    else if (rowBottom > viewBottom) el.scrollTop = rowBottom - el.clientHeight
+  }, [selectedIndex])
+
+  const virtualRange = React.useMemo(() => {
+    const start = Math.max(0, Math.floor(thumbScrollTop / THUMB_ROW_HEIGHT) - THUMB_OVERSCAN)
+    const visibleCount = Math.ceil(thumbViewportHeight / THUMB_ROW_HEIGHT) + THUMB_OVERSCAN * 2
+    const end = Math.min(items.length, start + visibleCount)
+    return { start, end }
+  }, [items.length, thumbScrollTop, thumbViewportHeight])
+
+  const virtualItems = React.useMemo(() => items.slice(virtualRange.start, virtualRange.end), [items, virtualRange])
+
+  React.useEffect(() => {
+    if (!virtualItems.length) return
+    setItems((prev) => {
+      let changed = false
+      const next = [...prev]
+      for (let i = virtualRange.start; i < virtualRange.end; i += 1) {
+        const item = next[i]
+        if (!item || item.isRaw || item.thumbLoaded) continue
+        next[i] = { ...item, thumbLoaded: true, url: URL.createObjectURL(item.file) }
+        changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [virtualItems, virtualRange])
+
+  React.useEffect(() => {
+    if (!selected || selected.url || selected.isRaw) return
+    setItems((prev) => prev.map((item) => item.id === selected.id ? { ...item, url: URL.createObjectURL(item.file), thumbLoaded: true } : item))
+  }, [selected])
 
   const removeItem = (id: string) => {
     decodeQueueRef.current = decodeQueueRef.current.filter((item) => item.id !== id)
@@ -245,14 +284,10 @@ function App() {
     setZoom(1)
     setBrightness(100)
     setPan({ x: 0, y: 0 })
+    setThumbScrollTop(0)
     if (inputRef.current) inputRef.current.value = ''
     if (folderInputRef.current) folderInputRef.current.value = ''
   }
-
-  React.useEffect(() => {
-    if (!selected || selected.url || selected.isRaw) return
-    setItems((prev) => prev.map((item) => item.id === selected.id ? { ...item, url: URL.createObjectURL(item.file), thumbLoaded: true } : item))
-  }, [selected])
 
   const zoomBy = (delta: number) => setZoom((current) => Math.min(8, Math.max(0.25, Number((current + delta).toFixed(2)))))
   const resetView = () => {
@@ -318,7 +353,7 @@ function App() {
       <aside className="sidebar">
         <div>
           <h1>RAW Viewer</h1>
-          <p className="muted">Handles large batches more carefully now: lazy thumbs, capped visible list, and throttled RAW decoding.</p>
+          <p className="muted">Now using real virtual scrolling for the sidebar, plus lazy thumbs and throttled RAW decoding.</p>
         </div>
 
         <label className="upload-card">
@@ -339,23 +374,33 @@ function App() {
           <span>{stats.total} files</span>
           {stats.processing ? <span>{stats.processing} decoding</span> : null}
           {stats.queued ? <span>{stats.queued} queued</span> : null}
-          {items.length > visibleItems.length ? <span>showing {visibleItems.length} around selection</span> : null}
+          <span>rendering {virtualItems.length}</span>
         </div>
 
-        <div className="thumb-list">
+        <div
+          ref={thumbListRef}
+          className="thumb-list"
+          onScroll={(event) => setThumbScrollTop(event.currentTarget.scrollTop)}
+        >
           {items.length === 0 ? (
             <div className="empty-state">No images yet. Drop a folder or a whole pile of files here.</div>
           ) : (
-            visibleItems.map((item) => (
-              <ThumbItem
-                key={item.id}
-                item={item}
-                active={item.id === selectedId}
-                onSelect={setSelectedId}
-                onRemove={removeItem}
-                onLoadThumb={ensureThumbLoaded}
-              />
-            ))
+            <div className="virtual-list" style={{ height: `${items.length * THUMB_ROW_HEIGHT}px` }}>
+              <div
+                className="virtual-list-window"
+                style={{ transform: `translateY(${virtualRange.start * THUMB_ROW_HEIGHT}px)` }}
+              >
+                {virtualItems.map((item) => (
+                  <ThumbItem
+                    key={item.id}
+                    item={item}
+                    active={item.id === selectedId}
+                    onSelect={setSelectedId}
+                    onRemove={removeItem}
+                  />
+                ))}
+              </div>
+            </div>
           )}
         </div>
       </aside>
