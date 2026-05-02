@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import LibRaw from 'libraw-wasm'
+import { patchLibRawPreviewSupport } from './libraw-preview'
 import './styles.css'
 
 type ItemStatus = 'queued' | 'ready' | 'processing' | 'error'
@@ -42,8 +43,10 @@ const isRegularImage = (file: File) => file.type.startsWith('image/') && !isRawF
 const makeId = (file: File) => `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`
 const readFileBuffer = async (file: File) => new Uint8Array(await file.arrayBuffer())
 
+patchLibRawPreviewSupport()
+
 const decodeRawToObjectUrl = async (file: File) => {
-  const raw = new LibRaw()
+  const raw = new LibRaw() as LibRaw & { thumbnailData?: () => Promise<Uint8Array | number[] | null> }
   const buffer = await readFileBuffer(file)
   await raw.open(buffer, {
     useCameraWb: true,
@@ -55,6 +58,11 @@ const decodeRawToObjectUrl = async (file: File) => {
   })
 
   const metadata = await raw.metadata(false)
+  const thumb = await raw.thumbnailData?.()
+  if (thumb && metadata?.thumb_format === 'jpeg') {
+    return URL.createObjectURL(new Blob([thumb], { type: 'image/jpeg' }))
+  }
+
   const image = await raw.imageData()
   const width = metadata?.width || metadata?.raw_width || metadata?.iwidth
   const height = metadata?.height || metadata?.raw_height || metadata?.iheight

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "dev": "vite"
+    "dev": "vite",
+    "postinstall": "node scripts/patch-libraw-wasm.mjs"
   },
   "dependencies": {
     "libraw-wasm": "^1.1.2",
