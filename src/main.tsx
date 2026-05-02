@@ -89,6 +89,7 @@ function App() {
   const [items, setItems] = React.useState<Item[]>([])
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [zoom, setZoom] = React.useState(1)
+  const [brightness, setBrightness] = React.useState(100)
   const [pan, setPan] = React.useState({ x: 0, y: 0 })
   const [isDragging, setIsDragging] = React.useState(false)
   const [isDropActive, setIsDropActive] = React.useState(false)
@@ -103,6 +104,7 @@ function App() {
 
   React.useEffect(() => {
     setZoom(1)
+    setBrightness(100)
     setPan({ x: 0, y: 0 })
   }, [selectedId])
 
@@ -168,6 +170,7 @@ function App() {
   const zoomBy = (delta: number) => setZoom((current) => Math.min(8, Math.max(0.25, Number((current + delta).toFixed(2)))))
   const resetView = () => {
     setZoom(1)
+    setBrightness(100)
     setPan({ x: 0, y: 0 })
   }
 
@@ -282,6 +285,17 @@ function App() {
             </div>
             <div className="viewer-subbar">
               <span>Zoom {Math.round(zoom * 100)}%</span>
+              <label className="brightness-control">
+                <span>Helligkeit {brightness}%</span>
+                <input
+                  type="range"
+                  min="50"
+                  max="200"
+                  step="5"
+                  value={brightness}
+                  onChange={(event) => setBrightness(Number(event.target.value))}
+                />
+              </label>
               {selected.status === 'processing' ? <span>Decoding RAW…</span> : null}
               {selected.status === 'error' ? <span className="error-text">{selected.error}</span> : null}
             </div>
@@ -291,7 +305,10 @@ function App() {
                   src={selected.url}
                   alt={selected.name}
                   className={isDragging ? 'dragging' : ''}
-                  style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+                  style={{
+                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                    filter: `brightness(${brightness}%)`,
+                  }}
                   onPointerDown={onPointerDown}
                   onPointerMove={onPointerMove}
                   onPointerUp={onPointerUp}

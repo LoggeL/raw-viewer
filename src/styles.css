@@ -192,7 +192,19 @@ a { color: inherit; }
   display: flex;
   gap: 16px;
   flex-wrap: wrap;
+  align-items: center;
   font-size: 0.95rem;
+}
+
+.brightness-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #c7d0db;
+}
+
+.brightness-control input {
+  accent-color: #5ea3ff;
 }
 .image-stage {
   flex: 1;
